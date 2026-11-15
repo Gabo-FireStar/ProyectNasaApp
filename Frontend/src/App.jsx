@@ -1,5 +1,5 @@
-// Frontend/src/App.jsx - Versión Completa con Pantalla de Registro para Niños
-import { useState, useEffect } from 'react'
+// Frontend/src/App.jsx - Versión Completa (Movimiento Personaje + Mouse Virtual con Joystick ESP32)
+import { useState, useEffect, useRef } from 'react'
 import './App.css'
 
 const API_URL = 'http://localhost:3001/api';
@@ -10,105 +10,185 @@ function App() {
   const [selectedGender, setSelectedGender] = useState('BOY');
   const [showGodotIframe, setShowGodotIframe] = useState(true);
 
-  // Leer datos del Backend cada 200 ms para respuesta fluida del Joystick y OLED
+  // Posición en porcentaje (0% a 100%) del Puntero Virtual dentro de la ventana de Godot
+  const [cursorPos, setCursorPos] = useState({ x: 50, y: 50 });
+  const [isClicking, setIsClicking] = useState(false);
+
+  const lastDirRef = useRef('STOP');
+  const currentDirRef = useRef('STOP');
+  const cursorPosRef = useRef({ x: 50, y: 50 });
+  const gameContainerRef = useRef(null);
+
+  // 1. Leer estado del Backend cada 90 ms
   const fetchStatus = async () => {
     try {
       const res = await fetch(`${API_URL}/status`);
       const data = await res.json();
       setMission(data);
     } catch (err) {
-      console.error("Esperando conexión con Backend en puerto 3001...");
+      // Silencioso para no saturar consola
     }
   };
 
   useEffect(() => {
     fetchStatus();
-    const interval = setInterval(fetchStatus, 200);
+    const interval = setInterval(fetchStatus, 90);
     return () => clearInterval(interval);
   }, []);
 
-  // Puente directo al motor HTML5 (<canvas>) de Godot (Movimiento + Botón Pin 32 Recoger Objetos)
-  useEffect(() => {
-    if (!mission || !mission.missionStarted) return;
+  // Helper: Simula movimiento o clic de Mouse directamente sobre el <canvas> de Godot
+  const dispatchGodotMouse = (type, percentX, percentY) => {
     const iframe = document.querySelector('iframe');
     if (!iframe || !iframe.contentDocument || !iframe.contentWindow) return;
 
     const canvas = iframe.contentDocument.getElementById('canvas') || iframe.contentDocument.querySelector('canvas');
-    const targets = [iframe.contentWindow, iframe.contentDocument, canvas].filter(Boolean);
+    if (!canvas) return;
 
-    if (canvas && iframe.contentDocument.activeElement !== canvas) {
-      canvas.focus();
+    const rect = canvas.getBoundingClientRect();
+    const clientX = rect.left + (rect.width * (percentX / 100));
+    const clientY = rect.top + (rect.height * (percentY / 100));
+
+    const eventInit = {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      view: iframe.contentWindow,
+      clientX: clientX,
+      clientY: clientY,
+      screenX: clientX,
+      screenY: clientY,
+      button: 0,
+      buttons: (type === 'mousedown' || type === 'pointerdown' || type === 'mousemove') ? 1 : 0
+    };
+
+    // Godot 4 en Web escucha tanto PointerEvents como MouseEvents
+    if (type.startsWith('pointer')) {
+      canvas.dispatchEvent(new PointerEvent(type, { ...eventInit, pointerId: 1, isPrimary: true, pointerType: 'mouse' }));
+    } else {
+      canvas.dispatchEvent(new MouseEvent(type, eventInit));
     }
+  };
+
+  // 2. Motor fluido a 60 FPS para mover el Cursor Virtual con el Joystick de la ESP32
+  useEffect(() => {
+    const moveCursorInterval = setInterval(() => {
+      const dir = currentDirRef.current;
+      if (!dir || dir === 'STOP') return;
+
+      const speed = 1.3; // Velocidad del puntero en pantalla
+      let { x, y } = cursorPosRef.current;
+
+      if (dir === 'UP') y = Math.max(4, y - speed);
+      if (dir === 'DOWN') y = Math.min(96, y + speed);
+      if (dir === 'LEFT') x = Math.max(4, x - speed);
+      if (dir === 'RIGHT') x = Math.min(96, x + speed);
+
+      cursorPosRef.current = { x, y };
+      setCursorPos({ x, y });
+
+      // Avisar a Godot que el mouse se movió a esa coordenada (para hover de bloques/botones)
+      dispatchGodotMouse('pointermove', x, y);
+      dispatchGodotMouse('mousemove', x, y);
+    }, 25);
+
+    return () => clearInterval(moveCursorInterval);
+  }, []);
+
+  // 3. Puente de Teclado + Clic de Mouse al presionar el botón del Pin 32
+  useEffect(() => {
+    if (!mission || !mission.missionStarted) return;
+
+    const currentDir = mission.joystickDir || 'STOP';
+    currentDirRef.current = currentDir;
+
+    const iframe = document.querySelector('iframe');
+    if (!iframe || !iframe.contentDocument || !iframe.contentWindow) return;
+
+    const canvas = iframe.contentDocument.getElementById('canvas') || iframe.contentDocument.querySelector('canvas');
+    const target = canvas || iframe.contentWindow;
 
     const triggerGodotKey = (type, keyInfo) => {
-      targets.forEach(target => {
-        const evt = new KeyboardEvent(type, {
-          key: keyInfo.key,
-          code: keyInfo.code,
-          keyCode: keyInfo.keyCode,
-          which: keyInfo.keyCode,
-          bubbles: true,
-          cancelable: true,
-          composed: true
-        });
-        target.dispatchEvent(evt);
+      const evt = new KeyboardEvent(type, {
+        key: keyInfo.key,
+        code: keyInfo.code,
+        keyCode: keyInfo.keyCode,
+        which: keyInfo.keyCode,
+        location: 0,
+        repeat: false,
+        bubbles: true,
+        cancelable: true
       });
+      target.dispatchEvent(evt);
     };
 
     const moveKeys = {
       UP: [
         { key: 'ArrowUp', code: 'ArrowUp', keyCode: 38 },
-        { key: 'w', code: 'KeyW', keyCode: 87 },
-        { key: 'W', code: 'KeyW', keyCode: 87 }
+        { key: 'w', code: 'KeyW', keyCode: 87 }
       ],
       DOWN: [
         { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40 },
-        { key: 's', code: 'KeyS', keyCode: 83 },
-        { key: 'S', code: 'KeyS', keyCode: 83 }
+        { key: 's', code: 'KeyS', keyCode: 83 }
       ],
       LEFT: [
         { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37 },
-        { key: 'a', code: 'KeyA', keyCode: 65 },
-        { key: 'A', code: 'KeyA', keyCode: 65 }
+        { key: 'a', code: 'KeyA', keyCode: 65 }
       ],
       RIGHT: [
         { key: 'ArrowRight', code: 'ArrowRight', keyCode: 39 },
-        { key: 'd', code: 'KeyD', keyCode: 68 },
-        { key: 'D', code: 'KeyD', keyCode: 68 }
+        { key: 'd', code: 'KeyD', keyCode: 68 }
       ]
     };
 
-    // 1. Si el joystick está en el centro (STOP), soltar todas las teclas de dirección
-    if (!mission.joystickDir || mission.joystickDir === 'STOP') {
-      Object.values(moveKeys).flat().forEach(k => triggerGodotKey('keyup', k));
-    } else if (moveKeys[mission.joystickDir]) {
-      // 2. Soltar las demás direcciones y mantener presionada la dirección actual
-      Object.keys(moveKeys).forEach(dir => {
-        if (dir !== mission.joystickDir) {
-          moveKeys[dir].forEach(k => triggerGodotKey('keyup', k));
+    // A) Movimiento del personaje por teclado (solo cuando cambia de dirección)
+    if (lastDirRef.current !== currentDir) {
+      if (lastDirRef.current !== 'STOP' && moveKeys[lastDirRef.current]) {
+        moveKeys[lastDirRef.current].forEach(k => triggerGodotKey('keyup', k));
+      }
+
+      if (currentDir !== 'STOP' && moveKeys[currentDir]) {
+        if (canvas && iframe.contentDocument.activeElement !== canvas) {
+          canvas.focus();
         }
-      });
-      moveKeys[mission.joystickDir].forEach(k => triggerGodotKey('keydown', k));
+        moveKeys[currentDir].forEach(k => triggerGodotKey('keydown', k));
+      }
+
+      lastDirRef.current = currentDir;
     }
 
-    // 3. BOTÓN PIN 32: Recoger objetos / Interactuar (Simula 'E', 'Espacio' y 'Enter')
+    // B) BOTÓN PIN 32: Hace Clic Izquierdo de Mouse en los bloques + Teclas de recoger objeto
     if (mission.actionBtn) {
+      if (canvas && iframe.contentDocument.activeElement !== canvas) {
+        canvas.focus();
+      }
+
+      const { x, y } = cursorPosRef.current;
+      setIsClicking(true);
+
+      // 1. Disparar clic real de Mouse sobre las coordenadas del bloque en Godot
+      dispatchGodotMouse('pointermove', x, y);
+      dispatchGodotMouse('mousemove', x, y);
+      dispatchGodotMouse('pointerdown', x, y);
+      dispatchGodotMouse('mousedown', x, y);
+
+      // 2. Disparar también teclas de interacción (E, Espacio, Enter)
       const pickupKeys = [
         { key: 'e', code: 'KeyE', keyCode: 69 },
-        { key: 'E', code: 'KeyE', keyCode: 69 },
         { key: ' ', code: 'Space', keyCode: 32 },
         { key: 'Enter', code: 'Enter', keyCode: 13 }
       ];
-
       pickupKeys.forEach(k => triggerGodotKey('keydown', k));
 
       setTimeout(() => {
+        dispatchGodotMouse('pointerup', x, y);
+        dispatchGodotMouse('mouseup', x, y);
+        dispatchGodotMouse('click', x, y);
         pickupKeys.forEach(k => triggerGodotKey('keyup', k));
-      }, 150);
+        setIsClicking(false);
+      }, 110);
     }
-  }, [mission]);
+  }, [mission?.joystickDir, mission?.actionBtn]);
 
-  // Iniciar misión cuando el niño escribe su nombre y presiona START MISSION
   const handleStartMission = async (e) => {
     e.preventDefault();
     if (!nameInput.trim()) return;
@@ -128,7 +208,6 @@ function App() {
     }
   };
 
-  // Botones exclusivos del Portal Web para cambiar prioridad de la base
   const sendCommand = async (mode) => {
     await fetch(`${API_URL}/decision`, {
       method: 'POST',
@@ -148,7 +227,6 @@ function App() {
     fetchStatus();
   };
 
-  // Regresar a la pantalla inicial y limpiar el nombre para el siguiente niño
   const handleReset = async () => {
     setNameInput('');
     await fetch(`${API_URL}/reset`, { method: 'POST' });
@@ -216,7 +294,7 @@ function App() {
   }
 
   // =========================================================================
-  // VISTA 2: PORTAL COMPLETO (GODOT + BARRAS + PANTALLA OLED ESP32 + BOTONES WEB)
+  // VISTA 2: PORTAL COMPLETO (GODOT + MIRA VIRTUAL + BARRAS + OLED ESP32)
   // =========================================================================
   return (
     <div style={{ background: '#070b14', color: '#f8fafc', minHeight: '100vh', display: 'flex', flexDirection: 'column', fontFamily: 'system-ui, sans-serif' }}>
@@ -238,7 +316,7 @@ function App() {
       {/* CONTENIDO EN 2 COLUMNAS: IZQUIERDA (GODOT) | DERECHA (OLED + BARRAS + BOTONES BASE) */}
       <main style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: '16px', padding: '16px', flex: 1 }}>
         
-        {/* COLUMNA IZQUIERDA: VENTANA DEL JUEGO DE GODOT */}
+        {/* COLUMNA IZQUIERDA: VENTANA DEL JUEGO DE GODOT CON PUNTERO VIRTUAL */}
         <section style={{ background: '#0f172a', borderRadius: '12px', border: '1px solid #1e293b', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <div style={{ background: '#1e293b', padding: '8px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px' }}>
             <b>🎮 Ventana del Juego (Godot Engine - Novela Gráfica / RPG)</b>
@@ -247,9 +325,38 @@ function App() {
             </button>
           </div>
 
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', padding: '10px', textAlign: 'center', background: '#020617' }}>
+          <div
+            ref={gameContainerRef}
+            style={{ position: 'relative', flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', padding: '10px', textAlign: 'center', background: '#020617' }}
+          >
             {showGodotIframe ? (
-              <iframe src="/godot/index.html" title="Godot Game" style={{ width: '100%', height: '100%', border: 'none', minHeight: '460px' }} />
+              <>
+                <iframe src="/godot/index.html" title="Godot Game" style={{ width: '100%', height: '100%', border: 'none', minHeight: '460px' }} />
+
+                {/* PUNTERO / MIRA VIRTUAL CONTROLADA POR EL JOYSTICK FÍSICO DE LA ESP32 */}
+                <div
+                  style={{
+                    position: 'absolute',
+                    left: `${cursorPos.x}%`,
+                    top: `${cursorPos.y}%`,
+                    transform: 'translate(-50%, -50%)',
+                    width: isClicking ? '28px' : '22px',
+                    height: isClicking ? '28px' : '22px',
+                    borderRadius: '50%',
+                    border: isClicking ? '3px solid #fde047' : '2px solid #00ffcc',
+                    backgroundColor: isClicking ? 'rgba(253, 224, 71, 0.35)' : 'rgba(0, 255, 204, 0.15)',
+                    boxShadow: '0 0 10px rgba(0, 255, 204, 0.8)',
+                    pointerEvents: 'none', // Deja pasar todos los clics hacia Godot
+                    zIndex: 50,
+                    display: 'flex',
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    transition: 'width 0.1s, height 0.1s'
+                  }}
+                >
+                  <div style={{ width: '4px', height: '4px', borderRadius: '50%', background: '#ffffff' }} />
+                </div>
+              </>
             ) : (
               <div style={{ maxWidth: '420px' }}>
                 <div style={{ fontSize: '45px', marginBottom: '10px' }}>🪐</div>
@@ -278,7 +385,7 @@ function App() {
                 {mission.solarStormActive ? '!! ALERTA CME DONKI !!' : 'CLIMA SOLAR: NOMINAL'}
               </div>
               <div style={{ color: '#fde047', marginTop: '6px', paddingTop: '4px', borderTop: '1px dotted #334155', fontSize: '12px' }}>
-                🕹️ MANDO ESP32: <b>{mission.joystickDir || 'STOP'}</b> | BTN RECOGER: <b>{mission.actionBtn ? 'ACTIVO' : 'OFF'}</b>
+                🕹️ MANDO ESP32: <b>{mission.joystickDir || 'STOP'}</b> | BTN / CLIC: <b>{mission.actionBtn || isClicking ? 'CLIC ACTIVO' : 'OFF'}</b>
               </div>
             </div>
           </div>
