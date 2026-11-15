@@ -5,7 +5,7 @@ import GameWindow from './godot/GameWindows';
 import {
   FaUserAstronaut, FaSatelliteDish, FaSyncAlt, FaMicrochip, FaChartBar,
   FaSeedling, FaBolt, FaShieldAlt, FaRadiation, FaSlidersH,
-  FaArrowUp, FaArrowDown, FaArrowLeft, FaDotCircle, FaSun,FaGamepad
+  FaArrowUp, FaArrowDown, FaArrowLeft, FaDotCircle, FaSun,FaGamepad,FaPlayCircle
 } from 'react-icons/fa';
 import ResourceBar from './components/ResourceBar';
 import ControlButton from './components/ControlButton';
@@ -16,6 +16,19 @@ function App() {
   const [nameInput, setNameInput] = useState('');
   const [selectedGender, setSelectedGender] = useState('BOY');
 
+  const frases = [
+  'Día 1 · La tormenta cubre los paneles. Sin energía no hay oxígeno.',
+  'Día 2 · -80 °C. Solo interferencia en la radio. Racionar o morir.',
+  'Día 3 · Una señal débil: «Aguanta... voy por ti».',
+  'En Marte no hay reabastecimiento. Todo recurso importa.',
+];
+
+// dentro de tu componente
+const [i, setI] = useState(0);
+useEffect(() => {
+  const t = setInterval(() => setI((p) => (p + 1) % frases.length), 4000);
+  return () => clearInterval(t);
+}, []);
   // Leer datos del Backend cada 1 segundo (Estos mismos datos los leerá el ESP32)
   const fetchStatus = async () => {
     try {
@@ -263,49 +276,54 @@ function App() {
 
         </div>
 
-        {/* 2. MONITOR DE RECURSOS */}
+        {/* 2. como jugar */}
         <div style={card}>
           <h4 style={{ margin: '0 0 14px 0', color: accent, fontSize: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <FaChartBar size={14} /> Monitor de Soporte Vital y Recursos
+            <FaPlayCircle size={14} /> Como Jugar
           </h4>
 
-          <ResourceBar icon={<FaSeedling size={13} />} label="Oxígeno y Alimentos (CSA)" value={mission.lifeSupport} color="#10b981" />
-          <ResourceBar icon={<FaBolt size={13} />} label="Energía de la Base" value={mission.power} color="#f59e0b" />
-          <ResourceBar icon={<FaShieldAlt size={13} />} label="Escudo contra Radiación" value={mission.radiationShield} color="#3b82f6" />
-
-          <div style={{ background: '#2a2110', padding: '8px 12px', borderRadius: '6px', fontSize: '12px', borderLeft: '3px solid #ef4444', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <FaRadiation size={13} color="#ef4444" />
-            <span>
-              <b>Dosis RadLab:</b> {mission.doseRateMgyDay} mGy/día | <b>Acumulada:</b> {mission.accumulatedDose} / 5.0 mGy
-            </span>
-          </div>
-        </div>
-
-        {/* 3. CONTROLES */}
-        <div style={card}>
-          <h4 style={{ margin: '0 0 12px 0', fontSize: '14px', color: accent, display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <FaSlidersH size={14} /> Control de Decisiones (Joystick / Web)
-          </h4>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '10px' }}>
-            <ControlButton background="#2563eb" icon={<FaArrowUp size={11} />} onClick={() => sendCommand('SHIELD')}>
-              Subir Escudo (-PWR -O2)
-            </ControlButton>
-            <ControlButton background="#059669" icon={<FaArrowDown size={11} />} onClick={() => sendCommand('LIFE_SUPPORT')}>
-              Subir Oxígeno (-SHD)
-            </ControlButton>
-            <ControlButton background="#d97706" icon={<FaArrowLeft size={11} />} onClick={() => sendCommand('POWER_SAVE')}>
-              Cargar Energía (-O2)
-            </ControlButton>
-            <ControlButton background="#57481f" icon={<FaDotCircle size={11} />} onClick={() => sendCommand('BALANCED')}>
-              Centro: Balanceado
-            </ControlButton>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          {/* Moverse con flechas */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+              <img
+                src="/assets/Fechas.png"
+                alt="Teclas de flechas"
+                style={{ width: '90px', height: 'auto', flexShrink: 0 }}
+              />
+              <p style={{ margin: 0, fontSize: '13px', lineHeight: 1.4 }}>
+                Usa las <strong>flechas</strong> del teclado para mover a tu astronauta por la base.
+              </p>
+            </div>
           </div>
 
-          <ControlButton fullWidth background={storm ? '#475569' : '#dc2626'} icon={<FaSun size={12} />} onClick={toggleSolarStorm}>
-            {storm ? 'Desactivar Tormenta Solar (DONKI)' : 'Activar Tormenta Solar (DONKI)'}
-          </ControlButton>
+          {/* Recoger objetos con E */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+            <img
+              src="/assets/LetraE.png"
+              alt="Tecla E"
+              style={{ width: '90px', height: 'auto', flexShrink: 0 }}
+            />
+            <p style={{ margin: 0, fontSize: '13px', lineHeight: 1.4 }}>
+              Presiona la tecla <strong>E</strong> para recoger objetos y usar las zonas de la base.
+            </p>
+          </div>
+          <br></br>
+
+                    {/* 3. panel */}
+          <div style={card}>
+            <h4 style={{ margin: '0 0 12px 0', fontSize: '14px', color: accent, display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <FaSlidersH size={14} /> Misión: Sobrevive 3 días
+            </h4>
+
+            <p style={{ margin: 0, fontSize: '12px', lineHeight: 1.5, opacity: 0.9 }}>
+              {frases[i]}
+            </p>
+          </div>
+
         </div>
+
+
+
 
       </aside>
     </main>
