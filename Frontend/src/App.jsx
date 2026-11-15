@@ -1,14 +1,20 @@
 // Frontend/src/App.jsx - Versión Completa (START + Barras + OLED ESP32 + Joystick + Godot)
 import { useState, useEffect } from 'react'
 import './App.css'
-
+import GameWindow from './godot/GameWindows';
+import {
+  FaUserAstronaut, FaSatelliteDish, FaSyncAlt, FaMicrochip, FaChartBar,
+  FaSeedling, FaBolt, FaShieldAlt, FaRadiation, FaSlidersH,
+  FaArrowUp, FaArrowDown, FaArrowLeft, FaDotCircle, FaSun,FaGamepad
+} from 'react-icons/fa';
+import ResourceBar from './components/ResourceBar';
+import ControlButton from './components/ControlButton';
 const API_URL = 'http://localhost:3001/api';
 
 function App() {
   const [mission, setMission] = useState(null);
   const [nameInput, setNameInput] = useState('');
   const [selectedGender, setSelectedGender] = useState('BOY');
-  const [showGodotIframe, setShowGodotIframe] = useState(false);
 
   // Leer datos del Backend cada 1 segundo (Estos mismos datos los leerá el ESP32)
   const fetchStatus = async () => {
@@ -23,19 +29,70 @@ function App() {
 
   useEffect(() => {
     fetchStatus();
-    const interval = setInterval(fetchStatus, 1000);
+    const interval = setInterval(fetchStatus, 200);
     return () => clearInterval(interval);
   }, []);
+  // Puente al motor HTML5 de Godot (movimiento + botón pin 32 para recoger objetos)
+  useEffect(() => {
+    if (!mission || !mission.missionStarted) return;
+    const iframe = document.querySelector('iframe');
+    if (!iframe || !iframe.contentDocument || !iframe.contentWindow) return;
+
+    const canvas = iframe.contentDocument.getElementById('canvas') || iframe.contentDocument.querySelector('canvas');
+    const targets = [iframe.contentWindow, iframe.contentDocument, canvas].filter(Boolean);
+
+    if (canvas && iframe.contentDocument.activeElement !== canvas) canvas.focus();
+
+    const triggerGodotKey = (type, k) => {
+      targets.forEach((target) => {
+        target.dispatchEvent(new KeyboardEvent(type, {
+          key: k.key, code: k.code, keyCode: k.keyCode, which: k.keyCode,
+          bubbles: true, cancelable: true, composed: true,
+        }));
+      });
+    };
+
+    const moveKeys = {
+      UP:    [{ key: 'ArrowUp', code: 'ArrowUp', keyCode: 38 }, { key: 'w', code: 'KeyW', keyCode: 87 }, { key: 'W', code: 'KeyW', keyCode: 87 }],
+      DOWN:  [{ key: 'ArrowDown', code: 'ArrowDown', keyCode: 40 }, { key: 's', code: 'KeyS', keyCode: 83 }, { key: 'S', code: 'KeyS', keyCode: 83 }],
+      LEFT:  [{ key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37 }, { key: 'a', code: 'KeyA', keyCode: 65 }, { key: 'A', code: 'KeyA', keyCode: 65 }],
+      RIGHT: [{ key: 'ArrowRight', code: 'ArrowRight', keyCode: 39 }, { key: 'd', code: 'KeyD', keyCode: 68 }, { key: 'D', code: 'KeyD', keyCode: 68 }],
+    };
+
+    // Joystick al centro: soltar todas las direcciones
+    if (!mission.joystickDir || mission.joystickDir === 'STOP') {
+      Object.values(moveKeys).flat().forEach((k) => triggerGodotKey('keyup', k));
+    } else if (moveKeys[mission.joystickDir]) {
+      // Soltar las demás y mantener la actual
+      Object.keys(moveKeys).forEach((dir) => {
+        if (dir !== mission.joystickDir) moveKeys[dir].forEach((k) => triggerGodotKey('keyup', k));
+      });
+      moveKeys[mission.joystickDir].forEach((k) => triggerGodotKey('keydown', k));
+    }
+
+    // Botón pin 32: recoger objetos / interactuar (E, Espacio, Enter)
+    if (mission.actionBtn) {
+        const pickupKeys = [
+          { key: 'e', code: 'KeyE', keyCode: 69 },
+          { key: 'E', code: 'KeyE', keyCode: 69 },
+          { key: ' ', code: 'Space', keyCode: 32 },
+          { key: 'Enter', code: 'Enter', keyCode: 13 },
+        ];
+        pickupKeys.forEach((k) => triggerGodotKey('keydown', k));
+        setTimeout(() => pickupKeys.forEach((k) => triggerGodotKey('keyup', k)), 150);
+      }
+    }, [mission]);
 
   // Iniciar misión desde la pantalla START
   const handleStartMission = async (e) => {
     e.preventDefault();
+    if (!nameInput.trim()) return;
     try {
       const res = await fetch(`${API_URL}/start-mission`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          playerName: nameInput.trim() || 'Julio',
+          playerName: nameInput.trim(),
           playerGender: selectedGender
         })
       });
@@ -67,9 +124,12 @@ function App() {
   };
 
   const handleReset = async () => {
+    setNameInput('');
     await fetch(`${API_URL}/reset`, { method: 'POST' });
     fetchStatus();
   };
+
+  
 
   // =========================================================================
   // VISTA 1: PANTALLA DE INICIO (START + NOMBRE + GÉNERO)
@@ -129,146 +189,128 @@ function App() {
       </div>
     );
   }
+  const storm = mission.solarStormActive;
+  const accent = storm ? '#ef4444' : '#facc15';
+
+  const card = {
+    background: '#17120a',
+    padding: '16px',
+    borderRadius: '10px',
+    border: `1px solid ${storm ? '#7f1d1d' : '#3a2f10'}`,
+    transition: 'border-color .4s',
+  };
 
   // =========================================================================
   // VISTA 2: PORTAL COMPLETO (GODOT + BARRAS + PANTALLA OLED ESP32 + JOYSTICK)
   // =========================================================================
   return (
-    <div style={{ background: '#070b14', color: '#f8fafc', minHeight: '100vh', display: 'flex', flexDirection: 'column', fontFamily: 'system-ui, sans-serif' }}>
-      
-      {/* BARRA SUPERIOR */}
-      <header style={{ background: '#0f172a', padding: '10px 20px', borderBottom: '1px solid #1e293b', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <span style={{ fontSize: '20px' }}>{mission.playerGender === 'GIRL' ? '👩‍🚀' : '👨‍🚀'}</span>
-          <strong style={{ color: '#38bdf8', fontSize: '16px' }}>Comandante {mission.playerName}</strong>
-          <span style={{ color: '#475569' }}>|</span>
-          <span style={{ fontSize: '13px', color: '#cbd5e1' }}>📡 <b>DONKI:</b> {mission.donkiLastEvent}</span>
+  <div
+    style={{
+      background: `radial-gradient(circle at 50% 0%, ${storm ? '#7f1d1d33' : '#facc1518'} 0%, #0d0a02 60%)`,
+      backgroundColor: '#0d0a02',
+      color: '#f8fafc',
+      minHeight: '100vh',
+      display: 'flex',
+      flexDirection: 'column',
+      fontFamily: 'system-ui, sans-serif',
+      transition: 'background .4s',
+    }}
+  >
+    {/* BARRA SUPERIOR */}
+    <header style={{ background: '#17120a', padding: '10px 20px', borderBottom: `1px solid ${storm ? '#7f1d1d' : '#3a2f10'}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <FaUserAstronaut size={20} color={accent} />
+        <strong style={{ color: accent, fontSize: '16px' }}>Comandante {mission.playerName}</strong>
+        <span style={{ color: '#57481f' }}>|</span>
+        <span style={{ fontSize: '13px', color: '#d6cfb8', display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <FaSatelliteDish size={13} color={accent} />
+          <b>DONKI:</b> {mission.donkiLastEvent}
+        </span>
+      </div>
+
+      <button onClick={handleReset} style={{ background: '#3a2f10', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <FaSyncAlt size={11} /> Cambiar Jugador / Reiniciar
+      </button>
+    </header>
+
+    {/* CONTENIDO EN 2 COLUMNAS */}
+    <main style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: '16px', padding: '16px', flex: 1 }}>
+
+      {/* COLUMNA IZQUIERDA: JUEGO */}
+      <GameWindow mission={mission} />
+
+      {/* COLUMNA DERECHA */}
+      <aside style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+
+        {/* 1. PANTALLA OLED */}
+        <div style={{ background: '#000000', color: storm ? '#ff4444' : '#00ffcc', padding: '14px', borderRadius: '10px', border: '3px solid #3a2f10', fontFamily: 'monospace', boxShadow: `0 0 12px ${storm ? 'rgba(255,68,68,0.2)' : 'rgba(0,255,204,0.15)'}` }}>
+          <div style={{ fontSize: '11px', color: '#a8a08a', marginBottom: '6px', borderBottom: '1px dashed #3a2f10', paddingBottom: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <FaMicrochip size={12} /> PANTALLA OLED 128x64 (DATOS ENVIADOS AL ESP32):
+          </div>
+          <div style={{ fontSize: '14px', lineHeight: '1.5' }}>
+            <div>CMD: {mission.playerName} | MODE: {mission.mode}</div>
+            <div>O2 : {mission.lifeSupport}% | PWR: {mission.power}%</div>
+            <div>SHD: {mission.radiationShield}% | RAD: {mission.doseRateMgyDay} mGy/d</div>
+            <div style={{ fontWeight: 'bold' }}>
+              {storm ? '!! ALERTA CME DONKI !!' : 'CLIMA SOLAR: NOMINAL'}
+            </div>
+          </div>
+
+            <div style={{ color: '#fde047', marginTop: '6px', paddingTop: '4px', borderTop: '1px dotted #3a2f10', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <FaGamepad size={12} /> MANDO ESP32: <b>{mission.joystickDir || 'STOP'}</b> | BTN RECOGER: <b>{mission.actionBtn ? 'ACTIVO' : 'OFF'}</b>
+            </div>
+
+
         </div>
 
-        <button onClick={handleReset} style={{ background: '#334155', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px' }}>
-          🔄 Cambiar Jugador / Reiniciar
-        </button>
-      </header>
+        {/* 2. MONITOR DE RECURSOS */}
+        <div style={card}>
+          <h4 style={{ margin: '0 0 14px 0', color: accent, fontSize: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <FaChartBar size={14} /> Monitor de Soporte Vital y Recursos
+          </h4>
 
-      {/* CONTENIDO EN 2 COLUMNAS: IZQUIERDA (GODOT) | DERECHA (BARRAS + OLED ESP32 + JOYSTICK) */}
-      <main style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: '16px', padding: '16px', flex: 1 }}>
-        
-        {/* COLUMNA IZQUIERDA: VENTANA DEL JUEGO DE GODOT (Sin efecto espejo) */}
-        <section style={{ background: '#0f172a', borderRadius: '12px', border: '1px solid #1e293b', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-          <div style={{ background: '#1e293b', padding: '8px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px' }}>
-            <b>🎮 Ventana del Juego (Godot Engine - Novela Gráfica / RPG)</b>
-            <button onClick={() => setShowGodotIframe(!showGodotIframe)} style={{ background: '#3b82f6', color: '#fff', border: 'none', padding: '4px 10px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px' }}>
-              {showGodotIframe ? 'Ocultar iframe' : 'Conectar public/godot/index.html'}
-            </button>
+          <ResourceBar icon={<FaSeedling size={13} />} label="Oxígeno y Alimentos (CSA)" value={mission.lifeSupport} color="#10b981" />
+          <ResourceBar icon={<FaBolt size={13} />} label="Energía de la Base" value={mission.power} color="#f59e0b" />
+          <ResourceBar icon={<FaShieldAlt size={13} />} label="Escudo contra Radiación" value={mission.radiationShield} color="#3b82f6" />
+
+          <div style={{ background: '#2a2110', padding: '8px 12px', borderRadius: '6px', fontSize: '12px', borderLeft: '3px solid #ef4444', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <FaRadiation size={13} color="#ef4444" />
+            <span>
+              <b>Dosis RadLab:</b> {mission.doseRateMgyDay} mGy/día | <b>Acumulada:</b> {mission.accumulatedDose} / 5.0 mGy
+            </span>
+          </div>
+        </div>
+
+        {/* 3. CONTROLES */}
+        <div style={card}>
+          <h4 style={{ margin: '0 0 12px 0', fontSize: '14px', color: accent, display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <FaSlidersH size={14} /> Control de Decisiones (Joystick / Web)
+          </h4>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '10px' }}>
+            <ControlButton background="#2563eb" icon={<FaArrowUp size={11} />} onClick={() => sendCommand('SHIELD')}>
+              Subir Escudo (-PWR -O2)
+            </ControlButton>
+            <ControlButton background="#059669" icon={<FaArrowDown size={11} />} onClick={() => sendCommand('LIFE_SUPPORT')}>
+              Subir Oxígeno (-SHD)
+            </ControlButton>
+            <ControlButton background="#d97706" icon={<FaArrowLeft size={11} />} onClick={() => sendCommand('POWER_SAVE')}>
+              Cargar Energía (-O2)
+            </ControlButton>
+            <ControlButton background="#57481f" icon={<FaDotCircle size={11} />} onClick={() => sendCommand('BALANCED')}>
+              Centro: Balanceado
+            </ControlButton>
           </div>
 
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', padding: '20px', textAlign: 'center', background: '#020617' }}>
-            {showGodotIframe ? (
-              <iframe src="/godot/index.html" title="Godot Game" style={{ width: '100%', height: '100%', border: 'none', minHeight: '420px' }} />
-            ) : (
-              <div style={{ maxWidth: '420px' }}>
-                <div style={{ fontSize: '45px', marginBottom: '10px' }}>🪐</div>
-                <h3 style={{ color: '#38bdf8', margin: '0 0 8px 0' }}>Esperando exportación de Godot...</h3>
-                <p style={{ color: '#94a3b8', fontSize: '13px', lineHeight: '1.5' }}>
-                  Cuando tus compañeros exporten el juego a HTML5 dentro de <code>Frontend/public/godot/index.html</code>, presiona el botón azul de arriba para jugarlo aquí.
-                </p>
-                <div style={{ background: '#0f172a', padding: '12px', borderRadius: '8px', border: '1px solid #1e293b', marginTop: '15px', fontSize: '12px', textAlign: 'left' }}>
-                  <div style={{ color: '#fde047', fontWeight: 'bold', marginBottom: '4px' }}>Datos listos para Godot y ESP32:</div>
-                  <div>• Jugador: <b>{mission.playerName} ({mission.playerGender})</b></div>
-                  <div>• Modo actual: <b>{mission.mode}</b></div>
-                </div>
-              </div>
-            )}
-          </div>
-        </section>
+          <ControlButton fullWidth background={storm ? '#475569' : '#dc2626'} icon={<FaSun size={12} />} onClick={toggleSolarStorm}>
+            {storm ? 'Desactivar Tormenta Solar (DONKI)' : 'Activar Tormenta Solar (DONKI)'}
+          </ControlButton>
+        </div>
 
-        {/* COLUMNA DERECHA: BARRAS DE OXÍGENO/ENERGÍA + PANTALLA OLED ESP32 + JOYSTICK */}
-        <aside style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-          
-          {/* 1. PANTALLA OLED (Exactamente lo que recibe la ESP32 por HTTP GET) */}
-          <div style={{ background: '#000000', color: '#00ffcc', padding: '14px', borderRadius: '10px', border: '3px solid #334155', fontFamily: 'monospace', boxShadow: '0 0 12px rgba(0,255,204,0.15)' }}>
-            <div style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '6px', borderBottom: '1px dashed #334155', paddingBottom: '4px' }}>
-              📟 PANTALLA OLED 128x64 (DATOS ENVIADOS AL ESP32):
-            </div>
-            <div style={{ fontSize: '14px', lineHeight: '1.5' }}>
-              <div>CMD: {mission.playerName} | MODE: {mission.mode}</div>
-              <div>O2 : {mission.lifeSupport}% | PWR: {mission.power}%</div>
-              <div>SHD: {mission.radiationShield}% | RAD: {mission.doseRateMgyDay} mGy/d</div>
-              <div style={{ color: mission.solarStormActive ? '#ff4444' : '#00ffcc', fontWeight: 'bold' }}>
-                {mission.solarStormActive ? '!! ALERTA CME DONKI !!' : 'CLIMA SOLAR: NOMINAL'}
-              </div>
-            </div>
-          </div>
-
-          {/* 2. BARRAS DE RECURSOS VITALES (Oxígeno, Energía, Escudo y RadLab) */}
-          <div style={{ background: '#0f172a', padding: '16px', borderRadius: '10px', border: '1px solid #1e293b' }}>
-            <h4 style={{ margin: '0 0 12px 0', color: '#fde047', fontSize: '14px' }}>📊 Monitor de Soporte Vital y Recursos</h4>
-
-            {/* Barra Oxígeno y Alimentos CSA */}
-            <div style={{ marginBottom: '10px', fontSize: '13px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span>🌱 Oxígeno y Alimentos (CSA)</span>
-                <b>{mission.lifeSupport}%</b>
-              </div>
-              <div style={{ background: '#1e293b', height: '14px', borderRadius: '6px', overflow: 'hidden', marginTop: '4px' }}>
-                <div style={{ background: '#10b981', width: `${mission.lifeSupport}%`, height: '100%', transition: '0.3s' }} />
-              </div>
-            </div>
-
-            {/* Barra Energía */}
-            <div style={{ marginBottom: '10px', fontSize: '13px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span>⚡ Energía de la Base</span>
-                <b>{mission.power}%</b>
-              </div>
-              <div style={{ background: '#1e293b', height: '14px', borderRadius: '6px', overflow: 'hidden', marginTop: '4px' }}>
-                <div style={{ background: '#f59e0b', width: `${mission.power}%`, height: '100%', transition: '0.3s' }} />
-              </div>
-            </div>
-
-            {/* Barra Escudo Radiación */}
-            <div style={{ marginBottom: '12px', fontSize: '13px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span>🛡️ Escudo contra Radiación</span>
-                <b>{mission.radiationShield}%</b>
-              </div>
-              <div style={{ background: '#1e293b', height: '14px', borderRadius: '6px', overflow: 'hidden', marginTop: '4px' }}>
-                <div style={{ background: '#3b82f6', width: `${mission.radiationShield}%`, height: '100%', transition: '0.3s' }} />
-              </div>
-            </div>
-
-            <div style={{ background: '#1e293b', padding: '8px 12px', borderRadius: '6px', fontSize: '12px', borderLeft: '3px solid #ef4444' }}>
-              ☢️ <b>Dosis RadLab:</b> {mission.doseRateMgyDay} mGy/día | <b>Acumulada:</b> {mission.accumulatedDose} / 5.0 mGy
-            </div>
-          </div>
-
-          {/* 3. CONTROLES DEL JOYSTICK Y TORMENTA SOLAR */}
-          <div style={{ background: '#0f172a', padding: '16px', borderRadius: '10px', border: '1px solid #1e293b' }}>
-            <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#38bdf8' }}>🕹️ Control de Decisiones (Joystick / Web)</h4>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '10px' }}>
-              <button onClick={() => sendCommand('SHIELD')} style={{ padding: '9px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}>
-                ⬆️ Subir Escudo (-PWR -O2)
-              </button>
-              <button onClick={() => sendCommand('LIFE_SUPPORT')} style={{ padding: '9px', background: '#059669', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}>
-                ⬇️ Subir Oxígeno (-SHD)
-              </button>
-              <button onClick={() => sendCommand('POWER_SAVE')} style={{ padding: '9px', background: '#d97706', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}>
-                ⬅️ Cargar Energía (-O2)
-              </button>
-              <button onClick={() => sendCommand('BALANCED')} style={{ padding: '9px', background: '#475569', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}>
-                ⏺️ Centro: Balanceado
-              </button>
-            </div>
-
-            <button onClick={toggleSolarStorm} style={{ width: '100%', padding: '9px', background: '#dc2626', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}>
-              ☀️ Activar / Desactivar Tormenta Solar (DONKI)
-            </button>
-          </div>
-
-        </aside>
-      </main>
-    </div>
-  )
+      </aside>
+    </main>
+  </div>
+);
 }
 
 export default App
