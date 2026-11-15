@@ -1,28 +1,33 @@
-// Backend/server.js
+// Backend/server.js - Eje X Normal, Eje Y Invertido + Pantalla START para Niños
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
 
 const app = express();
-app.use(cors());
+app.use(cors()); // Permite peticiones desde React (5173), Godot HTML5 y ESP32
 app.use(express.json());
 
+// TU API KEY DE LA NASA
 const NASA_API_KEY = 'DDPczBJ7mRhDqPqBmqpCtCKdP98NC6Q6GrCdrrfc';
 
-// 1. ESTADO CENTRAL DE LA MISIÓN (Incluye datos del Jugador)
+// 1. ESTADO CENTRAL DE LA MISIÓN (Inicia en false para pedir el nombre del niño)
 let missionState = {
-  // Datos del jugador (Se llenan cuando da START en la web)
-  missionStarted: false,
-  playerName: "Cadete",
-  playerGender: "BOY",           // 'BOY' | 'GIRL' | 'EXPLORER'
+  missionStarted: false,         // false = Muestra primero la pantalla de registro
+  playerName: "",                // Vacío hasta que el niño escriba su nombre
+  playerGender: "BOY",           // 'BOY' | 'GIRL'
 
-  // Recursos de la base
   sol: 1,
   power: 80,                     // Energía disponible (%)
-  lifeSupport: 90,               // Soporte vital: O2 y Alimentos CSA (%)
+  lifeSupport: 90,               // Oxígeno y Alimentos CSA (%)
   radiationShield: 30,           // Blindaje contra radiación (%)
-  mode: 'BALANCED',              // 'SHIELD' | 'LIFE_SUPPORT' | 'POWER_SAVE' | 'BALANCED'
-  
+  mode: 'BALANCED',              // Solo cambia desde los botones del Portal Web
+
+  // ESTADO EXCLUSIVO DEL MANDO FÍSICO ESP32 (Movimiento + Botón Recoger Objetos)
+  joystickDir: 'STOP',           // 'UP' | 'DOWN' | 'LEFT' | 'RIGHT' | 'STOP'
+  joystickX: 0,                  // -1 (Izquierda), 0 (Centro), 1 (Derecha)
+  joystickY: 0,                  // -1 (Arriba), 0 (Centro), 1 (Abajo)
+  actionBtn: false,              // true cuando se presiona el botón del Pin 32
+
   // Datos reales NASA RadLab y DONKI
   doseRateMgyDay: 0.45,
   accumulatedDose: 0.0,
@@ -31,10 +36,18 @@ let missionState = {
   donkiFlareCount: 0,
   donkiCmeCount: 0,
   statusText: "Sistemas estables en la base.",
-  gameOver: false
+  gameOver: false,
+
+  // Alias en español para compatibilidad directa con scripts de Godot
+  get energia() { return this.power; },
+  get alimentos() { return this.lifeSupport; },
+  get oxigeno() { return this.lifeSupport; },
+  get vida() { return this.lifeSupport; },
+  get escudo() { return this.radiationShield; },
+  get radiacion() { return this.solarStormActive; }
 };
 
-// 2. CONEXIÓN A NASA DONKI API
+// 2. CONEXIÓN A NASA DONKI API (FLR y CME)
 async function syncWithNasaApis() {
   try {
     const today = new Date();
@@ -60,7 +73,7 @@ async function syncWithNasaApis() {
 
     if (flares.length > 0) {
       const latestFlare = flares[flares.length - 1];
-      missionState.donkiLastEvent = `Erupción Solar Clase ${latestFlare.classType} (${latestFlare.beginTime}) | CMEs (30d): ${cmes.length}`;
+      missionState.donkiLastEvent = `Erupción Solar Clase ${latestFlare.classType} (${latestFlare.beginTime}) | CMEs: ${cmes.length}`;
       if (latestFlare.classType && (latestFlare.classType.startsWith('M') || latestFlare.classType.startsWith('X'))) {
         missionState.solarStormActive = true;
       }
@@ -76,7 +89,7 @@ async function syncWithNasaApis() {
 }
 syncWithNasaApis();
 
-// 3. SIMULACIÓN DE COMPENSACIONES (Solo corre si el niño ya dio START)
+// 3. SIMULACIÓN DE RECURSOS DE LA BASE (Solo corre cuando el niño ya inició la misión)
 setInterval(() => {
   if (!missionState.missionStarted || missionState.gameOver) return;
 
@@ -108,89 +121,121 @@ setInterval(() => {
 }, 2000);
 
 // =========================================================
-// 4. ENDPOINTS PARA REACT Y GODOT
+// 4. ENDPOINTS DE SINCRONIZACIÓN
 // =========================================================
 
-// A) NUEVO: Iniciar misión con Nombre y Género desde la pantalla START
+// A) GET /api/status -> Entrega estado completo a React, Godot y OLED
+app.get('/api/status', (req, res) => {
+  res.json(missionState);
+  if (missionState.actionBtn) {
+    missionState.actionBtn = false;
+  }
+});
+
+// B) POST /api/joystick -> EJE X NORMAL Y EJE Y INVERTIDO (UP <-> DOWN)
+app.post('/api/joystick', (req, res) => {
+  const { dir, button } = req.body;
+
+  if (dir !== undefined) {
+    // Eje X normal (LEFT es LEFT, RIGHT es RIGHT)
+    // Eje Y invertido (si llega UP pasa a DOWN, si llega DOWN pasa a UP)
+    let correctedDir = dir;
+    if (dir === 'UP') {
+      correctedDir = 'DOWN';
+    } else if (dir === 'DOWN') {
+      correctedDir = 'UP';
+    }
+
+    missionState.joystickDir = correctedDir;
+    missionState.joystickX = correctedDir === 'LEFT' ? -1 : (correctedDir === 'RIGHT' ? 1 : 0);
+    missionState.joystickY = correctedDir === 'UP' ? -1 : (correctedDir === 'DOWN' ? 1 : 0);
+  }
+
+  if (button === true) {
+    missionState.actionBtn = true;
+  }
+
+  res.json({
+    joystickDir: missionState.joystickDir,
+    joystickX: missionState.joystickX,
+    joystickY: missionState.joystickY,
+    actionBtn: missionState.actionBtn
+  });
+});
+
+// C) POST /api/status -> Recibe cambios desde Godot
+app.post('/api/status', (req, res) => {
+  const {
+    power, energia,
+    lifeSupport, alimentos, oxigeno, vida,
+    radiationShield, escudo,
+    solarStormActive, radiacion,
+    mode
+  } = req.body;
+
+  const newPower = power !== undefined ? power : energia;
+  const newLife = lifeSupport !== undefined ? lifeSupport : (alimentos !== undefined ? alimentos : (oxigeno !== undefined ? oxigeno : vida));
+  const newShield = radiationShield !== undefined ? radiationShield : escudo;
+  const newStorm = solarStormActive !== undefined ? solarStormActive : radiacion;
+
+  if (newPower !== undefined) missionState.power = Math.max(0, Math.min(100, Number(newPower)));
+  if (newLife !== undefined) missionState.lifeSupport = Math.max(0, Math.min(100, Number(newLife)));
+  if (newShield !== undefined) missionState.radiationShield = Math.max(0, Math.min(100, Number(newShield)));
+  if (newStorm !== undefined) missionState.solarStormActive = Boolean(newStorm);
+  if (mode !== undefined) missionState.mode = mode;
+
+  if (missionState.power > 0 && missionState.lifeSupport > 0 && missionState.accumulatedDose < 5.0) {
+    missionState.gameOver = false;
+  }
+
+  res.json(missionState);
+});
+
+// D) POST /api/start-mission -> Registra el nombre del niño e inicia el juego
 app.post('/api/start-mission', (req, res) => {
   const { playerName, playerGender } = req.body;
   missionState.playerName = playerName && playerName.trim() !== "" ? playerName.trim() : "Cadete";
   missionState.playerGender = playerGender || "BOY";
   missionState.missionStarted = true;
-  
-  // Reiniciar valores limpios para el nuevo jugador
   missionState.sol = 1;
   missionState.power = 80;
   missionState.lifeSupport = 90;
   missionState.radiationShield = 30;
   missionState.mode = 'BALANCED';
+  missionState.joystickDir = 'STOP';
+  missionState.actionBtn = false;
   missionState.accumulatedDose = 0.0;
   missionState.gameOver = false;
 
-  console.log(`👨‍🚀 Nueva misión iniciada por: ${missionState.playerName} (${missionState.playerGender})`);
   res.json(missionState);
 });
 
-// B) Leer estado (Godot lee aquí playerName y playerGender)
-app.get('/api/status', (req, res) => {
-  res.json(missionState);
-});
-
-// C) Diálogos estilo Persona / Pokémon personalizados con el nombre del jugador
-app.get('/api/dialogue-event', (req, res) => {
-  const titulo = missionState.playerGender === 'GIRL' ? 'Comandante' : 'Comandante';
-  
-  if (missionState.solarStormActive) {
-    res.json({
-      playerName: missionState.playerName,
-      playerGender: missionState.playerGender,
-      npcName: "ARIA (IA de la Base)",
-      emotion: "ALERTA",
-      dialogueText: `¡Atención ${titulo} ${missionState.playerName}! NASA DONKI reporta actividad solar (${missionState.donkiLastEvent}). La radiación subió a 4.50 mGy/día según RadLab. ¿Qué ordenas hacer?`,
-      choices: [
-        { id: "SHIELD", text: "Subir Escudo al máximo (-Energía, -O2)" },
-        { id: "LIFE_SUPPORT", text: "Priorizar Invernadero CSA (Riesgo de radiación)" },
-        { id: "POWER_SAVE", text: "Guardar energía en baterías" }
-      ]
-    });
-  } else {
-    res.json({
-      playerName: missionState.playerName,
-      playerGender: missionState.playerGender,
-      npcName: "Dr. Kael (Médico OSDR)",
-      emotion: "NORMAL",
-      dialogueText: `Hola ${titulo} ${missionState.playerName}. El clima espacial está estable (Dosis RadLab: ${missionState.doseRateMgyDay} mGy/día). Energía al ${missionState.power}% y O2 al ${missionState.lifeSupport}%. ¿Cuál es el plan?`,
-      choices: [
-        { id: "LIFE_SUPPORT", text: "Impulsar cultivo de alimentos y O2 (+O2, -Energía)" },
-        { id: "POWER_SAVE", text: "Recargar paneles solares (+Energía, -O2)" },
-        { id: "BALANCED", text: "Mantener sistemas balanceados" }
-      ]
-    });
-  }
-});
-
-// D) Decisiones en el juego
+// E) POST /api/decision -> EXCLUSIVO PARA LOS BOTONES DEL PORTAL WEB
 app.post('/api/decision', (req, res) => {
   const { mode, solarStormActive } = req.body;
   if (mode) missionState.mode = mode;
-  if (solarStormActive !== undefined) missionState.solarStormActive = solarStormActive;
+  if (solarStormActive !== undefined) missionState.solarStormActive = Boolean(solarStormActive);
   res.json(missionState);
 });
 
-// E) Volver a la pantalla de inicio / Reset
+// F) POST /api/reset -> Regresa a la pantalla de inicio para que otro niño ponga su nombre
 app.post('/api/reset', (req, res) => {
   missionState.missionStarted = false;
+  missionState.playerName = "";
   missionState.sol = 1;
   missionState.power = 80;
   missionState.lifeSupport = 90;
   missionState.radiationShield = 30;
   missionState.mode = 'BALANCED';
+  missionState.joystickDir = 'STOP';
+  missionState.actionBtn = false;
   missionState.accumulatedDose = 0.0;
+  missionState.solarStormActive = false;
   missionState.gameOver = false;
   res.json(missionState);
 });
 
 const PORT = 3001;
-app.listen(PORT, () => {
-  console.log(`🚀 Backend corriendo en http://localhost:${PORT}/api/status`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 Backend Bidireccional corriendo en http://localhost:${PORT}/api/status`);
 });
