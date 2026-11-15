@@ -5,7 +5,7 @@ import GameWindow from './godot/GameWindows';
 import {
   FaUserAstronaut, FaSatelliteDish, FaSyncAlt, FaMicrochip, FaChartBar,
   FaSeedling, FaBolt, FaShieldAlt, FaRadiation, FaSlidersH,
-  FaArrowUp, FaArrowDown, FaArrowLeft, FaDotCircle, FaSun,
+  FaArrowUp, FaArrowDown, FaArrowLeft, FaDotCircle, FaSun,FaGamepad
 } from 'react-icons/fa';
 import ResourceBar from './components/ResourceBar';
 import ControlButton from './components/ControlButton';
@@ -29,19 +29,70 @@ function App() {
 
   useEffect(() => {
     fetchStatus();
-    const interval = setInterval(fetchStatus, 1000);
+    const interval = setInterval(fetchStatus, 200);
     return () => clearInterval(interval);
   }, []);
+  // Puente al motor HTML5 de Godot (movimiento + botón pin 32 para recoger objetos)
+  useEffect(() => {
+    if (!mission || !mission.missionStarted) return;
+    const iframe = document.querySelector('iframe');
+    if (!iframe || !iframe.contentDocument || !iframe.contentWindow) return;
+
+    const canvas = iframe.contentDocument.getElementById('canvas') || iframe.contentDocument.querySelector('canvas');
+    const targets = [iframe.contentWindow, iframe.contentDocument, canvas].filter(Boolean);
+
+    if (canvas && iframe.contentDocument.activeElement !== canvas) canvas.focus();
+
+    const triggerGodotKey = (type, k) => {
+      targets.forEach((target) => {
+        target.dispatchEvent(new KeyboardEvent(type, {
+          key: k.key, code: k.code, keyCode: k.keyCode, which: k.keyCode,
+          bubbles: true, cancelable: true, composed: true,
+        }));
+      });
+    };
+
+    const moveKeys = {
+      UP:    [{ key: 'ArrowUp', code: 'ArrowUp', keyCode: 38 }, { key: 'w', code: 'KeyW', keyCode: 87 }, { key: 'W', code: 'KeyW', keyCode: 87 }],
+      DOWN:  [{ key: 'ArrowDown', code: 'ArrowDown', keyCode: 40 }, { key: 's', code: 'KeyS', keyCode: 83 }, { key: 'S', code: 'KeyS', keyCode: 83 }],
+      LEFT:  [{ key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37 }, { key: 'a', code: 'KeyA', keyCode: 65 }, { key: 'A', code: 'KeyA', keyCode: 65 }],
+      RIGHT: [{ key: 'ArrowRight', code: 'ArrowRight', keyCode: 39 }, { key: 'd', code: 'KeyD', keyCode: 68 }, { key: 'D', code: 'KeyD', keyCode: 68 }],
+    };
+
+    // Joystick al centro: soltar todas las direcciones
+    if (!mission.joystickDir || mission.joystickDir === 'STOP') {
+      Object.values(moveKeys).flat().forEach((k) => triggerGodotKey('keyup', k));
+    } else if (moveKeys[mission.joystickDir]) {
+      // Soltar las demás y mantener la actual
+      Object.keys(moveKeys).forEach((dir) => {
+        if (dir !== mission.joystickDir) moveKeys[dir].forEach((k) => triggerGodotKey('keyup', k));
+      });
+      moveKeys[mission.joystickDir].forEach((k) => triggerGodotKey('keydown', k));
+    }
+
+    // Botón pin 32: recoger objetos / interactuar (E, Espacio, Enter)
+    if (mission.actionBtn) {
+        const pickupKeys = [
+          { key: 'e', code: 'KeyE', keyCode: 69 },
+          { key: 'E', code: 'KeyE', keyCode: 69 },
+          { key: ' ', code: 'Space', keyCode: 32 },
+          { key: 'Enter', code: 'Enter', keyCode: 13 },
+        ];
+        pickupKeys.forEach((k) => triggerGodotKey('keydown', k));
+        setTimeout(() => pickupKeys.forEach((k) => triggerGodotKey('keyup', k)), 150);
+      }
+    }, [mission]);
 
   // Iniciar misión desde la pantalla START
   const handleStartMission = async (e) => {
     e.preventDefault();
+    if (!nameInput.trim()) return;
     try {
       const res = await fetch(`${API_URL}/start-mission`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          playerName: nameInput.trim() || 'Usuario',
+          playerName: nameInput.trim(),
           playerGender: selectedGender
         })
       });
@@ -73,9 +124,11 @@ function App() {
   };
 
   const handleReset = async () => {
+    setNameInput('');
     await fetch(`${API_URL}/reset`, { method: 'POST' });
     fetchStatus();
   };
+
   
 
   // =========================================================================
@@ -202,6 +255,12 @@ function App() {
               {storm ? '!! ALERTA CME DONKI !!' : 'CLIMA SOLAR: NOMINAL'}
             </div>
           </div>
+
+            <div style={{ color: '#fde047', marginTop: '6px', paddingTop: '4px', borderTop: '1px dotted #3a2f10', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <FaGamepad size={12} /> MANDO ESP32: <b>{mission.joystickDir || 'STOP'}</b> | BTN RECOGER: <b>{mission.actionBtn ? 'ACTIVO' : 'OFF'}</b>
+            </div>
+
+
         </div>
 
         {/* 2. MONITOR DE RECURSOS */}
