@@ -1,4 +1,4 @@
-// Frontend/src/App.jsx - Versión Completa (START + Barras + OLED ESP32 + Joystick + Godot)
+// Frontend/src/App.jsx - Versión Completa con Pantalla de Registro para Niños
 import { useState, useEffect } from 'react'
 import './App.css'
 
@@ -8,9 +8,9 @@ function App() {
   const [mission, setMission] = useState(null);
   const [nameInput, setNameInput] = useState('');
   const [selectedGender, setSelectedGender] = useState('BOY');
-  const [showGodotIframe, setShowGodotIframe] = useState(false);
+  const [showGodotIframe, setShowGodotIframe] = useState(true);
 
-  // Leer datos del Backend cada 1 segundo (Estos mismos datos los leerá el ESP32)
+  // Leer datos del Backend cada 200 ms para respuesta fluida del Joystick y OLED
   const fetchStatus = async () => {
     try {
       const res = await fetch(`${API_URL}/status`);
@@ -23,19 +23,101 @@ function App() {
 
   useEffect(() => {
     fetchStatus();
-    const interval = setInterval(fetchStatus, 1000);
+    const interval = setInterval(fetchStatus, 200);
     return () => clearInterval(interval);
   }, []);
 
-  // Iniciar misión desde la pantalla START
+  // Puente directo al motor HTML5 (<canvas>) de Godot (Movimiento + Botón Pin 32 Recoger Objetos)
+  useEffect(() => {
+    if (!mission || !mission.missionStarted) return;
+    const iframe = document.querySelector('iframe');
+    if (!iframe || !iframe.contentDocument || !iframe.contentWindow) return;
+
+    const canvas = iframe.contentDocument.getElementById('canvas') || iframe.contentDocument.querySelector('canvas');
+    const targets = [iframe.contentWindow, iframe.contentDocument, canvas].filter(Boolean);
+
+    if (canvas && iframe.contentDocument.activeElement !== canvas) {
+      canvas.focus();
+    }
+
+    const triggerGodotKey = (type, keyInfo) => {
+      targets.forEach(target => {
+        const evt = new KeyboardEvent(type, {
+          key: keyInfo.key,
+          code: keyInfo.code,
+          keyCode: keyInfo.keyCode,
+          which: keyInfo.keyCode,
+          bubbles: true,
+          cancelable: true,
+          composed: true
+        });
+        target.dispatchEvent(evt);
+      });
+    };
+
+    const moveKeys = {
+      UP: [
+        { key: 'ArrowUp', code: 'ArrowUp', keyCode: 38 },
+        { key: 'w', code: 'KeyW', keyCode: 87 },
+        { key: 'W', code: 'KeyW', keyCode: 87 }
+      ],
+      DOWN: [
+        { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40 },
+        { key: 's', code: 'KeyS', keyCode: 83 },
+        { key: 'S', code: 'KeyS', keyCode: 83 }
+      ],
+      LEFT: [
+        { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37 },
+        { key: 'a', code: 'KeyA', keyCode: 65 },
+        { key: 'A', code: 'KeyA', keyCode: 65 }
+      ],
+      RIGHT: [
+        { key: 'ArrowRight', code: 'ArrowRight', keyCode: 39 },
+        { key: 'd', code: 'KeyD', keyCode: 68 },
+        { key: 'D', code: 'KeyD', keyCode: 68 }
+      ]
+    };
+
+    // 1. Si el joystick está en el centro (STOP), soltar todas las teclas de dirección
+    if (!mission.joystickDir || mission.joystickDir === 'STOP') {
+      Object.values(moveKeys).flat().forEach(k => triggerGodotKey('keyup', k));
+    } else if (moveKeys[mission.joystickDir]) {
+      // 2. Soltar las demás direcciones y mantener presionada la dirección actual
+      Object.keys(moveKeys).forEach(dir => {
+        if (dir !== mission.joystickDir) {
+          moveKeys[dir].forEach(k => triggerGodotKey('keyup', k));
+        }
+      });
+      moveKeys[mission.joystickDir].forEach(k => triggerGodotKey('keydown', k));
+    }
+
+    // 3. BOTÓN PIN 32: Recoger objetos / Interactuar (Simula 'E', 'Espacio' y 'Enter')
+    if (mission.actionBtn) {
+      const pickupKeys = [
+        { key: 'e', code: 'KeyE', keyCode: 69 },
+        { key: 'E', code: 'KeyE', keyCode: 69 },
+        { key: ' ', code: 'Space', keyCode: 32 },
+        { key: 'Enter', code: 'Enter', keyCode: 13 }
+      ];
+
+      pickupKeys.forEach(k => triggerGodotKey('keydown', k));
+
+      setTimeout(() => {
+        pickupKeys.forEach(k => triggerGodotKey('keyup', k));
+      }, 150);
+    }
+  }, [mission]);
+
+  // Iniciar misión cuando el niño escribe su nombre y presiona START MISSION
   const handleStartMission = async (e) => {
     e.preventDefault();
+    if (!nameInput.trim()) return;
     try {
       const res = await fetch(`${API_URL}/start-mission`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          playerName: nameInput.trim() || 'Julio',
+          playerName: nameInput.trim(),
           playerGender: selectedGender
         })
       });
@@ -46,7 +128,7 @@ function App() {
     }
   };
 
-  // Enviar comando del Joystick / Decisiones
+  // Botones exclusivos del Portal Web para cambiar prioridad de la base
   const sendCommand = async (mode) => {
     await fetch(`${API_URL}/decision`, {
       method: 'POST',
@@ -66,13 +148,15 @@ function App() {
     fetchStatus();
   };
 
+  // Regresar a la pantalla inicial y limpiar el nombre para el siguiente niño
   const handleReset = async () => {
+    setNameInput('');
     await fetch(`${API_URL}/reset`, { method: 'POST' });
     fetchStatus();
   };
 
   // =========================================================================
-  // VISTA 1: PANTALLA DE INICIO (START + NOMBRE + GÉNERO)
+  // VISTA 1: PANTALLA DE INICIO (OBLIGATORIA HASTA QUE EL NIÑO PONGA SU NOMBRE)
   // =========================================================================
   if (!mission || !mission.missionStarted) {
     return (
@@ -81,27 +165,28 @@ function App() {
           <div style={{ fontSize: '40px' }}>🚀</div>
           <h1 style={{ margin: '5px 0', color: '#38bdf8', fontSize: '22px' }}>Junior Astronaut Trainer</h1>
           <p style={{ margin: '0 0 20px 0', color: '#94a3b8', fontSize: '13px' }}>
-            Ingresa tus datos para iniciar la misión y activar la telemetría OLED
+            ¡Bienvenido! Escribe tu nombre para iniciar la misión espacial
           </p>
 
           <div style={{ textAlign: 'left', marginBottom: '18px' }}>
             <label style={{ display: 'block', fontSize: '13px', color: '#cbd5e1', marginBottom: '6px', fontWeight: 'bold' }}>
-              1. Nombre o Apodo de Comandante:
+              1. ¿Cómo te llamas, Comandante?
             </label>
             <input
               type="text"
-              placeholder="Ej: Julio..."
+              placeholder="Escribe tu nombre aquí..."
               value={nameInput}
               onChange={(e) => setNameInput(e.target.value)}
               maxLength={18}
               required
+              autoFocus
               style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #334155', background: '#1e293b', color: '#fff', fontSize: '15px', boxSizing: 'border-box' }}
             />
           </div>
 
           <div style={{ textAlign: 'left', marginBottom: '22px' }}>
             <label style={{ display: 'block', fontSize: '13px', color: '#cbd5e1', marginBottom: '8px', fontWeight: 'bold' }}>
-              2. Selecciona tu Género / Avatar:
+              2. Selecciona tu Astronauta:
             </label>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
               <div
@@ -131,7 +216,7 @@ function App() {
   }
 
   // =========================================================================
-  // VISTA 2: PORTAL COMPLETO (GODOT + BARRAS + PANTALLA OLED ESP32 + JOYSTICK)
+  // VISTA 2: PORTAL COMPLETO (GODOT + BARRAS + PANTALLA OLED ESP32 + BOTONES WEB)
   // =========================================================================
   return (
     <div style={{ background: '#070b14', color: '#f8fafc', minHeight: '100vh', display: 'flex', flexDirection: 'column', fontFamily: 'system-ui, sans-serif' }}>
@@ -150,10 +235,10 @@ function App() {
         </button>
       </header>
 
-      {/* CONTENIDO EN 2 COLUMNAS: IZQUIERDA (GODOT) | DERECHA (BARRAS + OLED ESP32 + JOYSTICK) */}
+      {/* CONTENIDO EN 2 COLUMNAS: IZQUIERDA (GODOT) | DERECHA (OLED + BARRAS + BOTONES BASE) */}
       <main style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: '16px', padding: '16px', flex: 1 }}>
         
-        {/* COLUMNA IZQUIERDA: VENTANA DEL JUEGO DE GODOT (Sin efecto espejo) */}
+        {/* COLUMNA IZQUIERDA: VENTANA DEL JUEGO DE GODOT */}
         <section style={{ background: '#0f172a', borderRadius: '12px', border: '1px solid #1e293b', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <div style={{ background: '#1e293b', padding: '8px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px' }}>
             <b>🎮 Ventana del Juego (Godot Engine - Novela Gráfica / RPG)</b>
@@ -162,30 +247,25 @@ function App() {
             </button>
           </div>
 
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', padding: '20px', textAlign: 'center', background: '#020617' }}>
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', padding: '10px', textAlign: 'center', background: '#020617' }}>
             {showGodotIframe ? (
-              <iframe src="/godot/index.html" title="Godot Game" style={{ width: '100%', height: '100%', border: 'none', minHeight: '420px' }} />
+              <iframe src="/godot/index.html" title="Godot Game" style={{ width: '100%', height: '100%', border: 'none', minHeight: '460px' }} />
             ) : (
               <div style={{ maxWidth: '420px' }}>
                 <div style={{ fontSize: '45px', marginBottom: '10px' }}>🪐</div>
-                <h3 style={{ color: '#38bdf8', margin: '0 0 8px 0' }}>Esperando exportación de Godot...</h3>
-                <p style={{ color: '#94a3b8', fontSize: '13px', lineHeight: '1.5' }}>
-                  Cuando tus compañeros exporten el juego a HTML5 dentro de <code>Frontend/public/godot/index.html</code>, presiona el botón azul de arriba para jugarlo aquí.
+                <h3 style={{ color: '#38bdf8', margin: '0 0 8px 0' }}>Juego en pausa</h3>
+                <p style={{ color: '#94a3b8', fontSize: '13px' }}>
+                  Presiona el botón azul superior para mostrar la ventana de Godot.
                 </p>
-                <div style={{ background: '#0f172a', padding: '12px', borderRadius: '8px', border: '1px solid #1e293b', marginTop: '15px', fontSize: '12px', textAlign: 'left' }}>
-                  <div style={{ color: '#fde047', fontWeight: 'bold', marginBottom: '4px' }}>Datos listos para Godot y ESP32:</div>
-                  <div>• Jugador: <b>{mission.playerName} ({mission.playerGender})</b></div>
-                  <div>• Modo actual: <b>{mission.mode}</b></div>
-                </div>
               </div>
             )}
           </div>
         </section>
 
-        {/* COLUMNA DERECHA: BARRAS DE OXÍGENO/ENERGÍA + PANTALLA OLED ESP32 + JOYSTICK */}
+        {/* COLUMNA DERECHA: PANTALLA OLED + BARRAS DE RECURSOS + BOTONES DEL ENTORNO */}
         <aside style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
           
-          {/* 1. PANTALLA OLED (Exactamente lo que recibe la ESP32 por HTTP GET) */}
+          {/* 1. PANTALLA OLED 128x64 (DATOS ENVIADOS AL ESP32) */}
           <div style={{ background: '#000000', color: '#00ffcc', padding: '14px', borderRadius: '10px', border: '3px solid #334155', fontFamily: 'monospace', boxShadow: '0 0 12px rgba(0,255,204,0.15)' }}>
             <div style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '6px', borderBottom: '1px dashed #334155', paddingBottom: '4px' }}>
               📟 PANTALLA OLED 128x64 (DATOS ENVIADOS AL ESP32):
@@ -197,14 +277,16 @@ function App() {
               <div style={{ color: mission.solarStormActive ? '#ff4444' : '#00ffcc', fontWeight: 'bold' }}>
                 {mission.solarStormActive ? '!! ALERTA CME DONKI !!' : 'CLIMA SOLAR: NOMINAL'}
               </div>
+              <div style={{ color: '#fde047', marginTop: '6px', paddingTop: '4px', borderTop: '1px dotted #334155', fontSize: '12px' }}>
+                🕹️ MANDO ESP32: <b>{mission.joystickDir || 'STOP'}</b> | BTN RECOGER: <b>{mission.actionBtn ? 'ACTIVO' : 'OFF'}</b>
+              </div>
             </div>
           </div>
 
-          {/* 2. BARRAS DE RECURSOS VITALES (Oxígeno, Energía, Escudo y RadLab) */}
+          {/* 2. BARRAS DE RECURSOS VITALES */}
           <div style={{ background: '#0f172a', padding: '16px', borderRadius: '10px', border: '1px solid #1e293b' }}>
             <h4 style={{ margin: '0 0 12px 0', color: '#fde047', fontSize: '14px' }}>📊 Monitor de Soporte Vital y Recursos</h4>
 
-            {/* Barra Oxígeno y Alimentos CSA */}
             <div style={{ marginBottom: '10px', fontSize: '13px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <span>🌱 Oxígeno y Alimentos (CSA)</span>
@@ -215,7 +297,6 @@ function App() {
               </div>
             </div>
 
-            {/* Barra Energía */}
             <div style={{ marginBottom: '10px', fontSize: '13px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <span>⚡ Energía de la Base</span>
@@ -226,7 +307,6 @@ function App() {
               </div>
             </div>
 
-            {/* Barra Escudo Radiación */}
             <div style={{ marginBottom: '12px', fontSize: '13px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <span>🛡️ Escudo contra Radiación</span>
@@ -242,9 +322,9 @@ function App() {
             </div>
           </div>
 
-          {/* 3. CONTROLES DEL JOYSTICK Y TORMENTA SOLAR */}
+          {/* 3. BOTONES DEL PORTAL WEB PARA ESCUDOS Y RECURSOS */}
           <div style={{ background: '#0f172a', padding: '16px', borderRadius: '10px', border: '1px solid #1e293b' }}>
-            <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#38bdf8' }}>🕹️ Control de Decisiones (Joystick / Web)</h4>
+            <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#38bdf8' }}>🕹️ Control de Decisiones (Portal Web)</h4>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '10px' }}>
               <button onClick={() => sendCommand('SHIELD')} style={{ padding: '9px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}>
                 ⬆️ Subir Escudo (-PWR -O2)
